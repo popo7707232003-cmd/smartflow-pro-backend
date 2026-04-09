@@ -44,7 +44,7 @@ export function createMarketRouter(marketData: MarketDataService): Router {
       });
     }
 
-    const candles = marketData.getCandles(symbol, interval, limit);
+    const candles = marketData.getCandles(symbol as any, interval as any, limit);
 
     if (candles.length === 0) {
       return res.status(503).json({
@@ -91,8 +91,8 @@ export function createMarketRouter(marketData: MarketDataService): Router {
       });
     }
 
-    const candles1h = marketData.getCandles(symUpper.toLowerCase(), '1h');
-    const candles5m = marketData.getCandles(symUpper.toLowerCase(), '5m');
+    const candles1h = marketData.getCandles(symUpper.toLowerCase() as any, '1h' as any);
+    const candles5m = marketData.getCandles(symUpper.toLowerCase() as any, '5m' as any);
 
     if (candles1h.length < 30) {
       return res.status(503).json({
