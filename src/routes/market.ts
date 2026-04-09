@@ -120,8 +120,8 @@ export function createMarketRouter(marketData: MarketDataService): Router {
 
     for (const sym of config.symbols) {
       const symLower = sym.toLowerCase();
-      const candles1h = marketData.getCandles(symLower, '1h');
-      const candles5m = marketData.getCandles(symLower, '5m');
+      const candles1h = marketData.getCandles(symLower as any, '1h' as any);
+      const candles5m = marketData.getCandles(symLower as any, '5m' as any);
 
       if (candles1h.length < 15) {
         results[sym] = { error: `Insufficient data: ${candles1h.length} candles` };
@@ -196,4 +196,5 @@ export function createMarketRouter(marketData: MarketDataService): Router {
 
   return router;
 }
+
 
