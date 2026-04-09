@@ -9,8 +9,10 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "declaration": false,
-    "sourceMap": false
+    "sourceMap": false,
+    "noEmitOnError": false,
+    "allowJs": true
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }
