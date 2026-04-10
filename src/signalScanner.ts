@@ -52,35 +52,52 @@ export function initSignalScanner(dbPool: Pool) {
 
 // ===== DB Setup =====
 async function ensureTable() {
+  // Create table if brand new
   await pool.query(`
     CREATE TABLE IF NOT EXISTS signals (
       id SERIAL PRIMARY KEY,
       symbol VARCHAR(20) NOT NULL,
       direction VARCHAR(10) NOT NULL,
       entry DOUBLE PRECISION NOT NULL,
-      tp1 DOUBLE PRECISION NOT NULL,
-      tp2 DOUBLE PRECISION NOT NULL,
-      sl DOUBLE PRECISION NOT NULL,
-      score INTEGER NOT NULL,
-      max_score INTEGER DEFAULT 13,
-      score_details JSONB DEFAULT '{}',
-      rsi DOUBLE PRECISION,
-      atr DOUBLE PRECISION,
-      rr DOUBLE PRECISION,
-      timeframe VARCHAR(10) DEFAULT '15m',
-      reason TEXT,
-      status VARCHAR(20) DEFAULT 'active',
-      tp1_hit BOOLEAN DEFAULT FALSE,
-      tp2_hit BOOLEAN DEFAULT FALSE,
-      sl_hit BOOLEAN DEFAULT FALSE,
-      closed_at TIMESTAMPTZ,
-      pnl_percent DOUBLE PRECISION,
+      tp1 DOUBLE PRECISION,
+      tp2 DOUBLE PRECISION,
+      sl DOUBLE PRECISION,
+      score INTEGER,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
-    CREATE INDEX IF NOT EXISTS idx_signals_status ON signals(status);
-    CREATE INDEX IF NOT EXISTS idx_signals_symbol ON signals(symbol);
-    CREATE INDEX IF NOT EXISTS idx_signals_created ON signals(created_at DESC);
   `);
+
+  // Add all columns that might be missing on an existing table
+  const columns: [string, string][] = [
+    ['max_score', 'INTEGER DEFAULT 13'],
+    ['score_details', "JSONB DEFAULT '{}'"],
+    ['rsi', 'DOUBLE PRECISION'],
+    ['atr', 'DOUBLE PRECISION'],
+    ['rr', 'DOUBLE PRECISION'],
+    ['timeframe', "VARCHAR(10) DEFAULT '15m'"],
+    ['reason', 'TEXT'],
+    ['status', "VARCHAR(20) DEFAULT 'active'"],
+    ['tp1_hit', 'BOOLEAN DEFAULT FALSE'],
+    ['tp2_hit', 'BOOLEAN DEFAULT FALSE'],
+    ['sl_hit', 'BOOLEAN DEFAULT FALSE'],
+    ['closed_at', 'TIMESTAMPTZ'],
+    ['pnl_percent', 'DOUBLE PRECISION'],
+  ];
+
+  for (const [col, typedef] of columns) {
+    try {
+      await pool.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS ${col} ${typedef}`);
+    } catch (e: any) {
+      // ignore if already exists
+    }
+  }
+
+  try {
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_signals_status ON signals(status)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_signals_symbol ON signals(symbol)');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_signals_created ON signals(created_at DESC)');
+  } catch {}
+  console.log('[SignalScanner] Database table ready');
 }
 
 // ===== Binance Data Fetch =====
