@@ -93,9 +93,9 @@ export function calculateStopLevels(
   tp2Pct: number;
   rr: number;
 } | null {
-  const slDist = atr * TC.slMultiplier;   // ATR × 1.5
-  const tp1Dist = atr * TC.tp1Multiplier; // ATR × 2.0
-  const tp2Dist = atr * TC.tp2Multiplier; // ATR × 3.0
+  const minATR = entry * 0.003; const safeATR = Math.max(atr, minATR); const slDist = safeATR * TC.slMultiplier;   // ATR × 1.5
+  const tp1Dist = safeATR * 2.25; // ATR × 2.0
+  const tp2Dist = safeATR * 3.0; // ATR × 3.0
 
   let sl: number, tp1: number, tp2: number;
 
