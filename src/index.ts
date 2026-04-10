@@ -35,6 +35,16 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
+// Alias for Railway healthcheck
+app.get('/health', async (_req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'ok', ready: true });
+  } catch (err: any) {
+    res.json({ status: 'ok', ready: false });
+  }
+});
+
 app.use('/api', marketBiasRouter);
 app.use('/api', smartMoneyRouter);
 initSignalRoutes(pool);
