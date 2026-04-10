@@ -10,7 +10,13 @@ const app = express();
 const httpServer = createServer(app);
 const PORT = parseInt(process.env.PORT || '4000', 10);
 
-// Health check FIRST
+// CORS and middleware FIRST — before any routes
+app.use(cors({ origin: true, credentials: true }));
+app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false }));
+app.use(compression());
+app.use(express.json({ limit: '1mb' }));
+
+// Health check
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', uptime: Math.floor(process.uptime()), ready: servicesReady });
 });
@@ -18,11 +24,16 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', uptime: Math.floor(process.uptime()), ready: servicesReady, wsClients: clients.size });
 });
 
-// Middleware
-app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors({ origin: true, credentials: true }));
-app.use(compression());
-app.use(express.json({ limit: '1mb' }));
+// Portfolio placeholder routes (frontend expects these)
+app.get('/api/portfolio/stats', (_req, res) => {
+  res.json({ success: true, data: { totalTrades: 0, wins: 0, losses: 0, winRate: 0, profitFactor: 0, totalPnl: 0, maxDrawdown: 0, avgHoldTime: '-', monthReturn: 0 } });
+});
+app.get('/api/portfolio/trades', (_req, res) => {
+  res.json({ success: true, data: [] });
+});
+app.get('/api/signals', (_req, res) => {
+  res.json({ success: true, data: [] });
+});
 
 // WebSocket
 const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
@@ -54,12 +65,10 @@ async function initServices() {
     await initializeServices(app, broadcast);
     servicesReady = true;
     console.log('All services ready');
-
-    // 404 handler AFTER routes are mounted
+    // 404 handler AFTER all routes
     app.use((_req: any, res: any) => { res.status(404).json({ error: 'Not found' }); });
   } catch (err: any) {
     console.error('Service init error:', err.message);
-    // Still add 404 handler
     app.use((_req: any, res: any) => { res.status(404).json({ error: 'Not found' }); });
   }
 }
