@@ -150,6 +150,10 @@ const ECONOMIC_EVENTS = [
   { name: 'FOMC 會議紀要', dates: ['2026-05-20', '2026-07-08'], impact: 'medium' as const },
   { name: 'PCE 物價指數', dates: ['2026-04-30', '2026-05-29', '2026-06-26'], impact: 'high' as const },
   { name: 'ISM 製造業 PMI', dates: ['2026-05-01', '2026-06-01', '2026-07-01'], impact: 'medium' as const },
+  { name: 'Retail Sales 零售銷售', dates: ['2026-04-15', '2026-05-15', '2026-06-16'], impact: 'medium' as const },
+  { name: 'Housing Starts 新屋開工', dates: ['2026-04-16', '2026-05-19', '2026-06-17'], impact: 'low' as const },
+  { name: 'Existing Home Sales', dates: ['2026-04-18', '2026-05-22', '2026-06-22'], impact: 'low' as const },
+  { name: 'U Michigan Consumer Sentiment', dates: ['2026-04-14', '2026-05-16', '2026-06-13'], impact: 'medium' as const },
 ];
 
 async function checkEconomicCalendar() {
@@ -161,9 +165,9 @@ async function checkEconomicCalendar() {
       const diffMs = eventDate.getTime() - now.getTime();
       const diffDays = diffMs / (1000 * 60 * 60 * 24);
 
-      if (diffDays > 0 && diffDays <= 3) {
+      if (diffDays > 0 && diffDays <= 7) {
         const daysText = diffDays < 1 ? `${Math.round(diffDays * 24)}小時` : `${Math.round(diffDays)}天`;
-        const severity = event.impact === 'high' ? 'high' : event.impact === 'medium' ? 'medium' : 'low';
+        const severity = diffDays <= 2 ? 'high' : event.impact === 'high' ? 'high' : event.impact === 'medium' ? 'medium' : 'low';
 
         await saveAlert({
           type: 'economic',
