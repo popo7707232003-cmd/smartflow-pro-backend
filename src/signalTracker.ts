@@ -35,6 +35,16 @@ async function ensureTables() {
     );
     CREATE INDEX IF NOT EXISTS idx_sr_closed ON signal_results(closed_at DESC);
 
+    -- Fix missing columns on existing table
+    ALTER TABLE signal_results ADD COLUMN IF NOT EXISTS result VARCHAR(10) DEFAULT 'unknown';
+    ALTER TABLE signal_results ADD COLUMN IF NOT EXISTS exit_type VARCHAR(20) DEFAULT 'unknown';
+    ALTER TABLE signal_results ADD COLUMN IF NOT EXISTS exit_price DOUBLE PRECISION DEFAULT 0;
+    ALTER TABLE signal_results ADD COLUMN IF NOT EXISTS pnl_percent DOUBLE PRECISION DEFAULT 0;
+    ALTER TABLE signal_results ADD COLUMN IF NOT EXISTS direction VARCHAR(10) DEFAULT '';
+    ALTER TABLE signal_results ADD COLUMN IF NOT EXISTS entry DOUBLE PRECISION DEFAULT 0;
+    ALTER TABLE signal_results ADD COLUMN IF NOT EXISTS symbol VARCHAR(20) DEFAULT '';
+    ALTER TABLE signal_results ADD COLUMN IF NOT EXISTS signal_id INTEGER;
+
     CREATE TABLE IF NOT EXISTS daily_stats (
       id SERIAL PRIMARY KEY,
       date DATE NOT NULL UNIQUE,
