@@ -70,7 +70,7 @@ async function backfillClosedSignals() {
       SELECT s.* FROM signals s
       WHERE s.status IN ('closed', 'expired')
       AND s.pnl_percent IS NOT NULL
-      AND NOT EXISTS (SELECT 1 FROM signal_results sr WHERE sr.signal_id = s.id::text)
+      AND NOT EXISTS (SELECT 1 FROM signal_results sr WHERE sr.signal_id = CAST(s.id AS text))
     `);
 
     if (closed.length === 0) {
