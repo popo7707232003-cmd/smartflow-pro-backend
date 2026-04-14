@@ -1,3 +1,4 @@
+import debugRouter, { initDebugRoutes } from './debugRoutes';
 import express from 'express';
 import cors from 'cors';
 import http from 'http';
@@ -51,6 +52,7 @@ initSignalRoutes(pool);
 app.use('/api', signalRoutes);
 app.use('/api', initAlertEngine(pool));
 
+app.use('/api', initDebugRoutes(pool));
 const server = http.createServer(app);
 setupWebSocket(server);
 initSignalScanner(pool);
