@@ -31,19 +31,28 @@ async function ensureTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS alerts (
       id SERIAL PRIMARY KEY,
-      type VARCHAR(30) NOT NULL,
-      severity VARCHAR(10) NOT NULL,
-      title VARCHAR(200) NOT NULL,
-      message TEXT,
-      symbol VARCHAR(20),
-      value DOUBLE PRECISION,
-      source VARCHAR(100),
-      read BOOLEAN DEFAULT FALSE,
+      type VARCHAR(30),
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_alerts_created ON alerts(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_alerts_type ON alerts(type);
   `);
+
+  // Add columns that might be missing on existing table
+  const cols: [string, string][] = [
+    ['type', "VARCHAR(30) DEFAULT ''"],
+    ['severity', "VARCHAR(10) DEFAULT 'low'"],
+    ['title', "VARCHAR(200) DEFAULT ''"],
+    ['message', 'TEXT'],
+    ['symbol', 'VARCHAR(20)'],
+    ['value', 'DOUBLE PRECISION'],
+    ['source', 'VARCHAR(100)'],
+    ['read', 'BOOLEAN DEFAULT FALSE'],
+  ];
+  for (const [col, typedef] of cols) {
+    try { await pool.query(`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS ${col} ${typedef}`); } catch {}
+  }
+  console.log('[AlertEngine] Alerts table ready');
 }
 
 async function saveAlert(alert: Alert) {
