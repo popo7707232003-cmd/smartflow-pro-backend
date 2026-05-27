@@ -1,20 +1,18 @@
 -- 001_init.sql
 -- SmartFlow Pro — Database Schema
 -- PostgreSQL 16+
+--
+-- IMPORTANT: src/index.ts does NOT run this file at boot. Each active module
+-- (src/signalScanner.ts, src/signalTracker.ts, src/alertEngine.ts) bootstraps
+-- its own tables via CREATE TABLE IF NOT EXISTS + ALTER TABLE ADD COLUMN
+-- IF NOT EXISTS. This file mirrors that runtime schema for the signals /
+-- signal_results path so a fresh DB can also be bootstrapped via:
+--   npx tsx src/db/migrate.ts
+-- Keep this file in sync with the ensureTable() calls when schema changes.
 
 -- ═══ ENUMS ═══
-DO $$ BEGIN
-  CREATE TYPE trade_direction AS ENUM ('long', 'short');
-EXCEPTION WHEN duplicate_object THEN null; END $$;
-
-DO $$ BEGIN
-  CREATE TYPE signal_grade AS ENUM ('strong', 'medium', 'weak');
-EXCEPTION WHEN duplicate_object THEN null; END $$;
-
-DO $$ BEGIN
-  CREATE TYPE signal_status AS ENUM ('pending', 'tp1', 'tp2', 'sl', 'timeout', 'manual');
-EXCEPTION WHEN duplicate_object THEN null; END $$;
-
+-- Used by smart_money_txns / news_events / alerts only. The signals path
+-- uses plain VARCHAR (matches runtime ensureTable behavior).
 DO $$ BEGIN
   CREATE TYPE smart_money_type AS ENUM ('sell_pressure', 'accumulation', 'transfer');
 EXCEPTION WHEN duplicate_object THEN null; END $$;
@@ -29,66 +27,56 @@ EXCEPTION WHEN duplicate_object THEN null; END $$;
 
 -- ═══════════════════════════════════════
 -- TABLE: signals
+-- Mirrors src/signalScanner.ts:ensureTable()
 -- ═══════════════════════════════════════
 CREATE TABLE IF NOT EXISTS signals (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id              SERIAL PRIMARY KEY,
     symbol          VARCHAR(20) NOT NULL,
-    direction       trade_direction NOT NULL,
-    entry           DECIMAL(20, 8) NOT NULL,
-    tp1             DECIMAL(20, 8) NOT NULL,
-    tp1_pct         DECIMAL(8, 4) NOT NULL,
-    tp2             DECIMAL(20, 8) NOT NULL,
-    tp2_pct         DECIMAL(8, 4) NOT NULL,
-    sl              DECIMAL(20, 8) NOT NULL,
-    sl_pct          DECIMAL(8, 4) NOT NULL,
-    rr              DECIMAL(8, 4) NOT NULL,
-    atr             DECIMAL(20, 8) NOT NULL,
-    score           SMALLINT NOT NULL CHECK (score BETWEEN 0 AND 10),
-    score_label     signal_grade NOT NULL,
-    conditions      JSONB NOT NULL DEFAULT '{}',
-    warnings        TEXT[] DEFAULT '{}',
-    -- Indicator snapshot
-    rsi_value       DECIMAL(6, 2),
-    macd_histogram  DECIMAL(20, 8),
-    ema_alignment   VARCHAR(20),
-    vwap_bias       VARCHAR(10),
-    volume_ratio    DECIMAL(8, 2),
-    -- Structure
-    bos_confirmed   BOOLEAN DEFAULT FALSE,
-    choch_detected  BOOLEAN DEFAULT FALSE,
-    in_order_block  BOOLEAN DEFAULT FALSE,
-    has_fvg         BOOLEAN DEFAULT FALSE,
-    liq_sweep       BOOLEAN DEFAULT FALSE,
-    -- Status
-    status          signal_status NOT NULL DEFAULT 'pending',
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    direction       VARCHAR(10) NOT NULL,
+    entry           DOUBLE PRECISION NOT NULL,
+    tp1             DOUBLE PRECISION,
+    tp2             DOUBLE PRECISION,
+    sl              DOUBLE PRECISION,
+    score           INTEGER,
+    max_score       INTEGER DEFAULT 13,
+    score_details   JSONB DEFAULT '{}',
+    rsi             DOUBLE PRECISION,
+    atr             DOUBLE PRECISION,
+    rr              DOUBLE PRECISION,
+    timeframe       VARCHAR(10) DEFAULT '15m',
+    reason          TEXT,
+    status          VARCHAR(20) DEFAULT 'active',
+    tp1_hit         BOOLEAN DEFAULT FALSE,
+    tp2_hit         BOOLEAN DEFAULT FALSE,
+    sl_hit          BOOLEAN DEFAULT FALSE,
+    closed_at       TIMESTAMPTZ,
+    pnl_percent     DOUBLE PRECISION,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE INDEX IF NOT EXISTS idx_signals_status ON signals(status);
 CREATE INDEX IF NOT EXISTS idx_signals_symbol ON signals(symbol);
 CREATE INDEX IF NOT EXISTS idx_signals_created ON signals(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_signals_status ON signals(status);
-CREATE INDEX IF NOT EXISTS idx_signals_score ON signals(score DESC);
-CREATE INDEX IF NOT EXISTS idx_signals_symbol_date ON signals(symbol, created_at DESC);
 
 -- ═══════════════════════════════════════
 -- TABLE: signal_results
+-- Mirrors src/signalTracker.ts:ensureTable()
+-- Note: signal_id is TEXT (not UUID) and has no FK. Active code writes
+-- signals.id::text via sig.id.toString() on INSERT, and signalRoutes.ts
+-- joins with an implicit text/int coercion.
 -- ═══════════════════════════════════════
 CREATE TABLE IF NOT EXISTS signal_results (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    signal_id       UUID NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
-    result_type     VARCHAR(10) NOT NULL CHECK (result_type IN ('tp1', 'tp2', 'sl', 'timeout', 'manual')),
-    pnl             DECIMAL(20, 4) NOT NULL,
-    pnl_pct         DECIMAL(10, 4) NOT NULL,
-    exit_price      DECIMAL(20, 8),
-    hold_duration   INTERVAL,
-    mae_pct         DECIMAL(10, 4),
-    mfe_pct         DECIMAL(10, 4),
-    closed_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id              SERIAL PRIMARY KEY,
+    signal_id       TEXT NOT NULL,
+    symbol          VARCHAR(20),
+    direction       VARCHAR(10),
+    entry           NUMERIC,
+    exit_price      NUMERIC,
+    exit_type       VARCHAR(20),
+    pnl_percent     DOUBLE PRECISION,
+    result          VARCHAR(20),
+    closed_at       TIMESTAMPTZ DEFAULT NOW()
 );
-
-CREATE INDEX IF NOT EXISTS idx_results_signal ON signal_results(signal_id);
-CREATE INDEX IF NOT EXISTS idx_results_type ON signal_results(result_type);
-CREATE INDEX IF NOT EXISTS idx_results_closed ON signal_results(closed_at DESC);
 
 -- ═══════════════════════════════════════
 -- TABLE: smart_money_txns
