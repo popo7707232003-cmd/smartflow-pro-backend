@@ -96,6 +96,11 @@ router.get('/performance', async (_req: Request, res: Response) => {
     `);
     const partials = parseInt(partialResult.rows[0].partials) || 0;
 
+    const expiredResult = await pool.query(`
+      SELECT COUNT(*) as expired FROM signal_results WHERE result = 'expired'
+    `);
+    const expired = parseInt(expiredResult.rows[0].expired) || 0;
+
     // PnL stats
     const pnlResult = await pool.query(`
       SELECT
@@ -154,6 +159,7 @@ router.get('/performance', async (_req: Request, res: Response) => {
           wins,
           losses,
           partials,
+          expired,
           winRate: Math.round(winRate * 10) / 10,
           profitFactor: Math.round(profitFactor * 100) / 100,
           totalPnl: Math.round(totalPnl * 100) / 100,
