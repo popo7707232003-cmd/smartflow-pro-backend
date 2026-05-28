@@ -8,6 +8,39 @@ let pool: Pool;
 let intervalId: NodeJS.Timeout | null = null;
 let isRunning = false;
 
+// Diagnostic state — exposed via getTrackerStatus() for debug endpoint
+let ensureTableOk = false;
+let ensureTableError: string | null = null;
+let lastCheckStartAt: number | null = null;
+let lastCheckEndAt: number | null = null;
+let lastSignalsFetched = 0;
+let lastClosed = 0;
+let lastTp1Marked = 0;
+let lastExpired = 0;
+let lastCheckError: string | null = null;
+let lastCloseError: string | null = null;
+let lastCloseErrorAt: number | null = null;
+
+export function getTrackerStatus() {
+  const now = Date.now();
+  return {
+    isRunning,
+    ensureTableOk,
+    ensureTableError,
+    lastCheckStartAt: lastCheckStartAt ? new Date(lastCheckStartAt).toISOString() : null,
+    lastCheckEndAt:   lastCheckEndAt   ? new Date(lastCheckEndAt).toISOString()   : null,
+    lastCheckAgeSec:  lastCheckStartAt ? Math.round((now - lastCheckStartAt) / 1000) : null,
+    lastCheckDurationMs: lastCheckStartAt && lastCheckEndAt ? lastCheckEndAt - lastCheckStartAt : null,
+    lastSignalsFetched,
+    lastClosed,
+    lastTp1Marked,
+    lastExpired,
+    lastCheckError,
+    lastCloseError,
+    lastCloseErrorAt: lastCloseErrorAt ? new Date(lastCloseErrorAt).toISOString() : null,
+  };
+}
+
 // ============================================================
 // 初始化
 // ============================================================
@@ -15,14 +48,14 @@ export function initSignalTracker(dbPool: Pool) {
   pool = dbPool;
   ensureTable()
     .then(() => {
+      ensureTableOk = true;
       console.log('[SignalTracker] Initialized — checking every 30s');
       // 啟動後先跑一次
       checkSignals();
       intervalId = setInterval(checkSignals, CHECK_INTERVAL);
     })
     .catch((err) => {
-      // 沒有 .catch() 會變成 unhandled promise rejection 而靜默失敗 —
-      // tracker 永遠不會啟動，但 app 仍然在跑。
+      ensureTableError = err?.message || String(err);
       console.error('[SignalTracker] FATAL: ensureTable failed, tracker not started:', err);
     });
 }
@@ -114,6 +147,8 @@ async function checkSignals() {
     return;
   }
   isRunning = true;
+  lastCheckStartAt = Date.now();
+  lastCheckError = null;
   try {
     // 1. 撈最多 500 筆 active 訊號（FIFO oldest-first，確保 backlog 排水）
     const { rows: signals } = await pool.query(`
@@ -201,9 +236,15 @@ async function checkSignals() {
       `[SignalTracker] Checked ${signals.length} signals — ` +
       `closed: ${closedCount}, tp1_hit: ${tp1Count}, expired: ${expiredCount}`
     );
-  } catch (err) {
+    lastSignalsFetched = signals.length;
+    lastClosed = closedCount;
+    lastTp1Marked = tp1Count;
+    lastExpired = expiredCount;
+  } catch (err: any) {
+    lastCheckError = err?.message || String(err);
     console.error('[SignalTracker] Check error:', err);
   } finally {
+    lastCheckEndAt = Date.now();
     isRunning = false;
   }
 }
@@ -270,8 +311,10 @@ async function closeSignal(
       `[SignalTracker] ${sig.symbol} ${sig.direction} → ${result.toUpperCase()} ` +
       `(${exitType}, PnL: ${pnl.toFixed(2)}%)`
     );
-  } catch (err) {
+  } catch (err: any) {
     await client.query('ROLLBACK');
+    lastCloseError = `id=${sig.id} ${err?.message || String(err)}`;
+    lastCloseErrorAt = Date.now();
     console.error(`[SignalTracker] Close signal error (${sig.id}):`, err);
   } finally {
     client.release();
