@@ -74,9 +74,10 @@ router.get('/signals', async (req: Request, res: Response) => {
 // GET /api/performance — aggregated performance metrics
 router.get('/performance', async (_req: Request, res: Response) => {
   try {
-    // Overall stats
+    // Overall stats — count from signal_results so pre-fix orphan signals
+    // (status='closed' with no result row) don't dilute the denominator.
     const totalResult = await pool.query(`
-      SELECT COUNT(*) as total FROM signals WHERE status IN ('closed', 'expired')
+      SELECT COUNT(*) as total FROM signal_results WHERE exit_type != 'tp1_partial'
     `);
     const total = parseInt(totalResult.rows[0].total) || 0;
 

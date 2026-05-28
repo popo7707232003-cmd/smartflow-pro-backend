@@ -6,18 +6,25 @@ const EXPIRY_HOURS = 24;          // 24 小時後過期
 
 let pool: Pool;
 let intervalId: NodeJS.Timeout | null = null;
+let isRunning = false;
 
 // ============================================================
 // 初始化
 // ============================================================
 export function initSignalTracker(dbPool: Pool) {
   pool = dbPool;
-  ensureTable().then(() => {
-    console.log('[SignalTracker] Initialized — checking every 30s');
-    // 啟動後先跑一次
-    checkSignals();
-    intervalId = setInterval(checkSignals, CHECK_INTERVAL);
-  });
+  ensureTable()
+    .then(() => {
+      console.log('[SignalTracker] Initialized — checking every 30s');
+      // 啟動後先跑一次
+      checkSignals();
+      intervalId = setInterval(checkSignals, CHECK_INTERVAL);
+    })
+    .catch((err) => {
+      // 沒有 .catch() 會變成 unhandled promise rejection 而靜默失敗 —
+      // tracker 永遠不會啟動，但 app 仍然在跑。
+      console.error('[SignalTracker] FATAL: ensureTable failed, tracker not started:', err);
+    });
 }
 
 // 確保 signal_results 表結構正確
@@ -36,8 +43,12 @@ async function ensureTable() {
       closed_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
-  // 確保欄位都在（防止舊表缺欄位）
+  // 確保欄位都在（防止舊表缺欄位）— legacy schema 沒有 symbol/direction/entry/exit_price
   const cols = [
+    { name: 'symbol', type: 'VARCHAR(20)' },
+    { name: 'direction', type: 'VARCHAR(10)' },
+    { name: 'entry', type: 'NUMERIC' },
+    { name: 'exit_price', type: 'NUMERIC' },
     { name: 'exit_type', type: 'VARCHAR(20)' },
     { name: 'result', type: 'VARCHAR(20)' },
     { name: 'pnl_percent', type: 'DOUBLE PRECISION' },
@@ -46,6 +57,19 @@ async function ensureTable() {
     await pool.query(
       `ALTER TABLE signal_results ADD COLUMN IF NOT EXISTS ${col.name} ${col.type}`
     );
+  }
+
+  // Legacy UUID-based schema had result_type/pnl/pnl_pct as NOT NULL; the
+  // active INSERT does not write those columns. Drop NOT NULL so the INSERT
+  // can succeed. Only swallow SQLSTATE 42703 ("column does not exist") for
+  // fresh DBs; rethrow everything else so operational failures surface.
+  const dropNotNull = ['result_type', 'pnl', 'pnl_pct'];
+  for (const col of dropNotNull) {
+    try {
+      await pool.query(`ALTER TABLE signal_results ALTER COLUMN ${col} DROP NOT NULL`);
+    } catch (e: any) {
+      if (e?.code !== '42703') throw e;
+    }
   }
 }
 
@@ -83,14 +107,22 @@ async function fetchPrices(symbols: string[]): Promise<Record<string, number>> {
 // 核心：檢查所有 active 訊號
 // ============================================================
 async function checkSignals() {
+  // In-flight guard: 30s interval is shorter than a full backlog drain.
+  // Without this, overlapping scans exhaust the pg pool and hammer Binance.
+  if (isRunning) {
+    console.log('[SignalTracker] Previous scan still running, skipping');
+    return;
+  }
+  isRunning = true;
   try {
-    // 1. 撈所有 active 訊號
+    // 1. 撈最多 500 筆 active 訊號（FIFO oldest-first，確保 backlog 排水）
     const { rows: signals } = await pool.query(`
       SELECT id, symbol, direction, entry, tp1, tp2, sl,
              tp1_hit, tp2_hit, sl_hit, created_at
       FROM signals
       WHERE status = 'active'
-      ORDER BY created_at DESC
+      ORDER BY created_at ASC
+      LIMIT 500
     `);
 
     if (signals.length === 0) {
@@ -171,6 +203,8 @@ async function checkSignals() {
     );
   } catch (err) {
     console.error('[SignalTracker] Check error:', err);
+  } finally {
+    isRunning = false;
   }
 }
 
@@ -188,8 +222,8 @@ async function closeSignal(
   try {
     await client.query('BEGIN');
 
-    // 1. 更新 signals 表
-    await client.query(
+    // 1. 更新 signals 表（gate on status='active' 防止並發重複關閉 → 重複 INSERT）
+    const updateResult = await client.query(
       `UPDATE signals SET
         status = 'closed',
         closed_at = NOW(),
@@ -197,9 +231,14 @@ async function closeSignal(
         sl_hit = CASE WHEN $3 = 'sl' THEN true ELSE sl_hit END,
         tp2_hit = CASE WHEN $3 = 'tp2' THEN true ELSE tp2_hit END,
         tp1_hit = CASE WHEN $3 IN ('tp1','tp2') THEN true ELSE tp1_hit END
-      WHERE id = $2`,
+      WHERE id = $2 AND status = 'active'`,
       [pnl, sig.id, exitType]
     );
+    if (updateResult.rowCount === 0) {
+      // 已被並發掃描關閉，放棄這次 INSERT
+      await client.query('ROLLBACK');
+      return;
+    }
 
     // 如果是 expired，status 設為 expired 而非 closed
     if (exitType === 'expired') {
