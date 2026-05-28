@@ -1,6 +1,12 @@
 import { Pool } from 'pg';
 
-const BINANCE_API = 'https://api.binance.com/api/v3/ticker/price';
+// data-api.binance.vision is reachable from Railway's region; api.binance.com
+// is NOT (debug endpoint confirms this — see signalScanner.ts for the same
+// pattern). Try the data-api host first, fall back to api.binance.com.
+const BINANCE_PRICE_URLS = [
+  'https://data-api.binance.vision/api/v3/ticker/price',
+  'https://api.binance.com/api/v3/ticker/price',
+];
 const CHECK_INTERVAL = 30_000;    // 30 秒
 const EXPIRY_HOURS = 24;          // 24 小時後過期
 
@@ -20,6 +26,8 @@ let lastExpired = 0;
 let lastCheckError: string | null = null;
 let lastCloseError: string | null = null;
 let lastCloseErrorAt: number | null = null;
+let lastPricesFetched = 0;
+let lastPriceFetchError: string | null = null;
 
 export function getTrackerStatus() {
   const now = Date.now();
@@ -38,6 +46,8 @@ export function getTrackerStatus() {
     lastCheckError,
     lastCloseError,
     lastCloseErrorAt: lastCloseErrorAt ? new Date(lastCloseErrorAt).toISOString() : null,
+    lastPricesFetched,
+    lastPriceFetchError,
   };
 }
 
@@ -109,29 +119,77 @@ async function ensureTable() {
 // ============================================================
 // 從 Binance 批量取價格
 // ============================================================
+// Wrap fetch with a hard timeout so a hung Binance request can't strand the
+// tracker (isRunning would otherwise stay true forever and block all scans).
+async function fetchWithTimeout(url: string, ms = 8000): Promise<Response> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { signal: ctrl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function fetchPrices(symbols: string[]): Promise<Record<string, number>> {
   const prices: Record<string, number> = {};
-  if (symbols.length === 0) return prices;
+  lastPriceFetchError = null;
+  if (symbols.length === 0) {
+    lastPricesFetched = 0;
+    return prices;
+  }
 
-  try {
-    const symbolList = JSON.stringify(symbols);
-    const url = `${BINANCE_API}?symbols=${encodeURIComponent(symbolList)}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Binance API ${res.status}`);
-    const data: Array<{ symbol: string; price: string }> = await res.json();
-    for (const item of data) {
-      prices[item.symbol] = parseFloat(item.price);
+  const encodedSymbols = encodeURIComponent(JSON.stringify(symbols));
+  const errors: string[] = [];
+
+  // Try bulk endpoint on each host in order. Treat empty/all-invalid
+  // responses as failure so we fall through to the next host or per-symbol
+  // fallback, instead of silently returning 0 prices.
+  for (const base of BINANCE_PRICE_URLS) {
+    try {
+      const res = await fetchWithTimeout(`${base}?symbols=${encodedSymbols}`);
+      if (!res.ok) {
+        errors.push(`${base} → ${res.status}`);
+        continue;
+      }
+      const data: Array<{ symbol: string; price: string }> = await res.json();
+      const collected: Record<string, number> = {};
+      for (const item of data) {
+        if (!item || typeof item.symbol !== 'string') continue;
+        const p = parseFloat(item.price);
+        if (Number.isFinite(p) && p > 0) collected[item.symbol] = p;
+      }
+      if (Object.keys(collected).length === 0) {
+        errors.push(`${base} → empty/malformed bulk response`);
+        continue;
+      }
+      Object.assign(prices, collected);
+      lastPricesFetched = Object.keys(prices).length;
+      return prices;
+    } catch (err: any) {
+      errors.push(`${base} → ${err?.message || err}`);
     }
-  } catch (err) {
-    console.error('[SignalTracker] Price fetch error:', err);
-    // fallback: 逐一抓
-    for (const sym of symbols) {
+  }
+
+  // Per-symbol fallback across both hosts
+  for (const sym of symbols) {
+    for (const base of BINANCE_PRICE_URLS) {
       try {
-        const res = await fetch(`${BINANCE_API}?symbol=${sym}`);
-        const data = await res.json();
-        prices[sym] = parseFloat(data.price);
-      } catch { /* skip */ }
+        const res = await fetchWithTimeout(`${base}?symbol=${encodeURIComponent(sym)}`);
+        if (!res.ok) continue;
+        const data: any = await res.json();
+        const p = parseFloat(data?.price);
+        if (Number.isFinite(p) && p > 0) {
+          prices[sym] = p;
+          break;
+        }
+      } catch { /* try next */ }
     }
+  }
+  lastPricesFetched = Object.keys(prices).length;
+  if (lastPricesFetched === 0) {
+    lastPriceFetchError = errors.join('; ') || 'all price fetches failed';
+    console.error('[SignalTracker] Price fetch failed:', lastPriceFetchError);
   }
   return prices;
 }
